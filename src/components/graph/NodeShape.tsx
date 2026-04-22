@@ -105,7 +105,11 @@ export function NodeShape({
 
       {/* Label */}
       {editingLabel ? (
-        <foreignObject x={-r + 6} y={-12} width={(r - 6) * 2} height={24}>
+        <foreignObject
+          x={-r + 6} y={-12} width={(r - 6) * 2} height={24}
+          onPointerDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+        >
           <input
             autoFocus
             value={draft}
@@ -128,8 +132,9 @@ export function NodeShape({
           fontSize={13}
           fontWeight={500}
           fill={textFill}
-          onDoubleClick={() => { setDraft(node.label); setEditingLabel(true); }}
-          className="select-none"
+          className="select-none cursor-text"
+          onPointerDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); setDraft(node.label); setEditingLabel(true); }}
         >
           {node.label}
         </text>

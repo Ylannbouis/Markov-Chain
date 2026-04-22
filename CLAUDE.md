@@ -61,12 +61,22 @@ Self-loop probability labels are placed at `pullOut=72` from the node center alo
 
 `ADD_NODE`, `UPDATE_NODE_POSITION`, `UPDATE_NODE_LABEL`, `DELETE_NODE` (cascades to incident edges + redistributes), `ADD_EDGE` (auto-assigns remaining probability), `UPDATE_EDGE_PROBABILITY` (normalizes siblings), `DELETE_EDGE` (redistributes), `LOAD_GRAPH`.
 
+### Pan and zoom
+
+All graph content lives in a `<g ref={viewGroupRef}>` inside the SVG. Pan and zoom are applied by writing `transform="translate(x y) scale(s)"` directly to that element via `viewGroupRef.current.setAttribute(...)` — no React state, same bypass pattern as particles.
+
+- **Pan**: pointer down on background starts tracking. Once the pointer moves > 3px, `isPanningRef` flips true and each `pointermove` updates `panZoomRef` and calls `applyTransform()`. Pointer is captured on the SVG so panning continues outside the element. A sub-3px release is treated as a click (add node / deselect).
+- **Zoom**: a non-passive native `wheel` listener (required for `preventDefault` to work) zooms to cursor. The world point under the cursor stays fixed: `newPanX = cursorSVG.x - worldX * newScale`.
+- **Coordinate conversion**: `toSVG()` first converts screen→SVG via `getScreenCTM()`, then un-applies pan/zoom: `worldX = (svgX - panX) / scale`.
+- The grid rect is `x="-50000" y="-50000" width="100000" height="100000"` so it covers any pan distance. `patternUnits="userSpaceOnUse"` means the 40-unit grid tiles scale naturally with zoom.
+
 ### Canvas interaction model
 
-`GraphCanvas` handles pointer events at two levels:
+`GraphCanvas` handles pointer events at several levels:
 
-- **SVG-level** (`onPointerDown` on the `<svg>`): Only fires for background clicks. The guard `t !== svgRef.current && t.id !== 'grid-bg'` returns early for anything that isn't the grid background rect. In `addNode` mode this adds a node; otherwise it deselects.
+- **SVG-level** (`onPointerDown` on the `<svg>`): Only fires for background clicks (guard: `t !== svgRef.current && t.id !== 'grid-bg'`). Records pan start; actual tool actions (add node / deselect) fire on `pointerup` only if the pointer moved < 3px (i.e., was a click, not a pan drag).
 - **Node-level** (`onPointerDown` on each node `<g>`): Calls `e.stopPropagation()` so SVG-level never fires. In `delete` mode dispatches `DELETE_NODE` immediately (one-click); in `select` mode starts a drag; in `addEdge` mode starts a ghost edge.
+- **Node label** (`onClick` / `onPointerDown` on the label `<text>`): Both events stop propagation so clicking the label neither selects the node nor starts a drag. Single click enters inline edit mode (same pattern as `ProbabilityLabel`). Blur or Enter commits via `UPDATE_NODE_LABEL`; Escape cancels.
 - **Edge-level** (`onClick` on each edge `<g>`): In `delete` mode dispatches `DELETE_EDGE` immediately; otherwise selects the edge. No `stopPropagation` — SVG `onPointerDown` fires first but returns early because the path target is not `grid-bg`.
 
 Delete behavior is symmetric: both nodes and edges are removed on a single click/tap with no confirmation while the `delete` tool is active.
