@@ -12,7 +12,7 @@ function AppInner() {
     <SimulationProvider mode={simulationMode}>
       <div className="flex flex-col h-screen">
         <Toolbar />
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden">
           <GraphCanvas />
         </div>
         <SimulationControls />

@@ -61,7 +61,7 @@ export function Toolbar() {
 
       {/* Simulation mode */}
       <button className={modeBtn('state')} onClick={() => handleModeChange('state')}>
-        ● State
+        ● Single Particle
       </button>
       <button className={modeBtn('ensemble')} onClick={() => handleModeChange('ensemble')}>
         ⠿ Ensemble

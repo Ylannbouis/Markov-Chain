@@ -90,34 +90,54 @@ export function getSelfLoopArrowAngle(node: MarkovNode, loopAngle: number): numb
 
 /** Get self-loop label position. */
 export function getSelfLoopLabelPosition(node: MarkovNode, loopAngle: number): Point {
-  const pullOut = 90;
+  const pullOut = 72;
   return {
     x: node.x + pullOut * Math.cos(loopAngle),
     y: node.y + pullOut * Math.sin(loopAngle),
   };
 }
 
-/** Interpolate a point along a straight or quadratic edge at t ∈ [0,1]. */
-export function interpolateEdge(source: MarkovNode, target: MarkovNode, t: number, curved = false): Point {
-  const { x1, y1, x2, y2 } = getEdgeEndpoints(source, target);
-  if (!curved) return { x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t };
-  const dx = x2 - x1;
-  const dy = y2 - y1;
+/**
+ * Interpolate a particle position along a non-self-loop edge at t ∈ [0,1].
+ * Uses center-to-center interpolation so particles emerge from / are absorbed
+ * into each node cleanly, with no circumference jump between transitions.
+ */
+export function interpolateEdge(
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  t: number,
+  curved = false
+): Point {
+  if (!curved) {
+    return {
+      x: source.x + (target.x - source.x) * t,
+      y: source.y + (target.y - source.y) * t,
+    };
+  }
+  // Curved (bidirectional): quadratic bezier through a center-based control point,
+  // same lateral offset direction as getEdgePath.
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
   const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-  const cx = (x1 + x2) / 2 - (dy / dist) * 36;
-  const cy = (y1 + y2) / 2 + (dx / dist) * 36;
+  const cx = (source.x + target.x) / 2 - (dy / dist) * 36;
+  const cy = (source.y + target.y) / 2 + (dx / dist) * 36;
   const mt = 1 - t;
   return {
-    x: mt * mt * x1 + 2 * mt * t * cx + t * t * x2,
-    y: mt * mt * y1 + 2 * mt * t * cy + t * t * y2,
+    x: mt * mt * source.x + 2 * mt * t * cx + t * t * target.x,
+    y: mt * mt * source.y + 2 * mt * t * cy + t * t * target.y,
   };
 }
 
-/** Interpolate a point along a self-loop cubic bezier at t ∈ [0,1]. */
-export function interpolateSelfLoop(node: MarkovNode, loopAngle: number, t: number): Point {
+/**
+ * Interpolate a particle position along a self-loop at t ∈ [0,1].
+ * Uses a composite path: short ramp from node center → self-loop arc → short ramp back to center.
+ * Starts and ends at the node center so there is no position jump between transitions.
+ */
+export function interpolateSelfLoop(node: { x: number; y: number; radius: number }, loopAngle: number, t: number): Point {
   const r = node.radius;
   const spread = 0.5;
   const pullOut = 80;
+  // Visual arc endpoints (same as getSelfLoopPath)
   const ax = node.x + r * Math.cos(loopAngle - spread);
   const ay = node.y + r * Math.sin(loopAngle - spread);
   const bx = node.x + r * Math.cos(loopAngle + spread);
@@ -126,14 +146,24 @@ export function interpolateSelfLoop(node: MarkovNode, loopAngle: number, t: numb
   const c1y = ay + pullOut * Math.sin(loopAngle);
   const c2x = bx + pullOut * Math.cos(loopAngle);
   const c2y = by + pullOut * Math.sin(loopAngle);
-  const mt = 1 - t;
-  return {
-    x: mt * mt * mt * ax + 3 * mt * mt * t * c1x + 3 * mt * t * t * c2x + t * t * t * bx,
-    y: mt * mt * mt * ay + 3 * mt * mt * t * c1y + 3 * mt * t * t * c2y + t * t * t * by,
-  };
-}
 
-/** Arrow angle for straight edges (at target endpoint). */
-export function getEdgeArrowAngle(source: MarkovNode, target: MarkovNode): number {
-  return Math.atan2(target.y - source.y, target.x - source.x);
+  const RAMP = 0.08; // fraction of t dedicated to enter/exit ramp
+
+  if (t < RAMP) {
+    // Linear ramp from node center to arc entry point
+    const s = t / RAMP;
+    return { x: node.x + (ax - node.x) * s, y: node.y + (ay - node.y) * s };
+  } else if (t > 1 - RAMP) {
+    // Linear ramp from arc exit point back to node center
+    const s = (t - (1 - RAMP)) / RAMP;
+    return { x: bx + (node.x - bx) * s, y: by + (node.y - by) * s };
+  } else {
+    // Remap to [0,1] and follow the visual arc bezier exactly
+    const u = (t - RAMP) / (1 - 2 * RAMP);
+    const mt = 1 - u;
+    return {
+      x: mt * mt * mt * ax + 3 * mt * mt * u * c1x + 3 * mt * u * u * c2x + u * u * u * bx,
+      y: mt * mt * mt * ay + 3 * mt * mt * u * c1y + 3 * mt * u * u * c2y + u * u * u * by,
+    };
+  }
 }

@@ -2,12 +2,11 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { useGraph } from '@/store/graphContext';
 import { useUI } from '@/store/uiContext';
 import { useSimulation } from '@/store/simulationContext';
-import { screenToSVG } from '@/utils/svgGeometry';
+import { screenToSVG, interpolateEdge, interpolateSelfLoop } from '@/utils/svgGeometry';
 import { newId } from '@/utils/idGen';
 import { EdgeLayer } from './EdgeLayer';
 import { NodeLayer } from './NodeLayer';
 import { ParticleLayer } from './ParticleLayer';
-import type { MarkovNode } from '@/types';
 
 export function GraphCanvas() {
   const { graph, dispatch } = useGraph();
@@ -16,7 +15,7 @@ export function GraphCanvas() {
     selectedNodeId, setSelectedNodeId,
     selectedEdgeId, setSelectedEdgeId,
   } = useUI();
-  const { particlesRef, particleLayerRef, running, reset } = useSimulation();
+  const { particlesRef, particleLayerRef, running, reset, resetCount } = useSimulation();
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const draggingNodeRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
@@ -24,7 +23,10 @@ export function GraphCanvas() {
   const edgeSourceRef = useRef<string | null>(null);
   const isEnsemble = simulationMode === 'ensemble';
 
-  // Delete selected on keyboard
+  // Keep a stable ref to graph so drag handler can read current edges without stale closure
+  const graphRef = useRef(graph);
+  useEffect(() => { graphRef.current = graph; }, [graph]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -48,7 +50,8 @@ export function GraphCanvas() {
   }, []);
 
   const handleSVGPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
-    if ((e.target as Element).closest('circle, text, foreignObject, polygon')) return;
+    const t = e.target as SVGElement;
+    if (t !== svgRef.current && t.id !== 'grid-bg') return;
     if (activeTool === 'addNode') {
       const pos = toSVG(e);
       dispatch({ type: 'ADD_NODE', payload: { id: newId('n'), label: 'State', x: pos.x, y: pos.y } });
@@ -60,13 +63,13 @@ export function GraphCanvas() {
 
   const handleNodePointerDown = useCallback((e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
-    if (activeTool === 'select' || activeTool === 'delete') {
-      if (activeTool === 'delete') {
-        dispatch({ type: 'DELETE_NODE', payload: { id: nodeId } });
-        setSelectedNodeId(null);
-        reset(simulationMode);
-        return;
-      }
+    if (activeTool === 'delete') {
+      dispatch({ type: 'DELETE_NODE', payload: { id: nodeId } });
+      setSelectedNodeId(null);
+      reset(simulationMode);
+      return;
+    }
+    if (activeTool === 'select') {
       const node = graph.nodes.find(n => n.id === nodeId)!;
       const pos = toSVG(e);
       draggingNodeRef.current = {
@@ -84,6 +87,52 @@ export function GraphCanvas() {
     }
   }, [activeTool, graph.nodes, toSVG, dispatch, setSelectedNodeId, setSelectedEdgeId, reset, simulationMode]);
 
+  const syncParticlesToDrag = useCallback((draggedNodeId: string, newX: number, newY: number) => {
+    const g = graphRef.current;
+    // Build curved edge set
+    const curvedEdgeIds = new Set(
+      g.edges.filter(e =>
+        g.edges.some(r => r.sourceId === e.targetId && r.targetId === e.sourceId && r.id !== e.id)
+      ).map(e => e.id)
+    );
+    // Build updated node positions (drag hasn't committed to React state yet)
+    const nodePos = new Map(g.nodes.map(n => [n.id, { x: n.x, y: n.y, radius: n.radius }]));
+    nodePos.set(draggedNodeId, { x: newX, y: newY, radius: nodePos.get(draggedNodeId)?.radius ?? 44 });
+
+    const layer = particleLayerRef.current;
+    particlesRef.current.forEach((p, i) => {
+      let px = p.x, py = p.y;
+
+      if (!p.transitioning && p.currentNodeId === draggedNodeId) {
+        px = newX;
+        py = newY;
+      } else if (p.transitioning && p.edgeId) {
+        const edge = g.edges.find(e => e.id === p.edgeId);
+        if (edge && (edge.sourceId === draggedNodeId || edge.targetId === draggedNodeId)) {
+          const src = nodePos.get(edge.sourceId);
+          const tgt = nodePos.get(edge.targetId);
+          if (src && tgt) {
+            const pos = edge.sourceId === edge.targetId
+              ? interpolateSelfLoop(src, edge.loopAngle, p.t)
+              : interpolateEdge(src, tgt, p.t, curvedEdgeIds.has(edge.id));
+            px = pos.x;
+            py = pos.y;
+          }
+        }
+      }
+
+      if (px !== p.x || py !== p.y) {
+        p.x = px;
+        p.y = py;
+        if (layer) {
+          const el = layer.children[i] as SVGCircleElement | undefined;
+          el?.setAttribute('cx', String(px));
+          el?.setAttribute('cy', String(py));
+        }
+      }
+    });
+  }, [particlesRef, particleLayerRef]);
+
   const handlePointerMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     const pos = toSVG(e);
     if (draggingNodeRef.current) {
@@ -93,31 +142,19 @@ export function GraphCanvas() {
         type: 'UPDATE_NODE_POSITION',
         payload: { id: draggingNodeRef.current.id, x: newX, y: newY },
       });
-      // When paused, sync idle particles on this node directly to the DOM
+      // Always sync particles (when running the rAF will overwrite on next frame anyway)
       if (!running) {
-        const layer = particleLayerRef.current;
-        particlesRef.current.forEach((p, i) => {
-          if (!p.transitioning && p.currentNodeId === draggingNodeRef.current!.id) {
-            p.x = newX;
-            p.y = newY;
-            if (layer) {
-              const el = layer.children[i] as SVGCircleElement | undefined;
-              el?.setAttribute('cx', String(newX));
-              el?.setAttribute('cy', String(newY));
-            }
-          }
-        });
+        syncParticlesToDrag(draggingNodeRef.current.id, newX, newY);
       }
     }
     if (ghostEdge) {
       setGhostEdge(g => g ? { ...g, x2: pos.x, y2: pos.y } : null);
     }
-  }, [toSVG, dispatch, ghostEdge, running, particlesRef, particleLayerRef]);
+  }, [toSVG, dispatch, ghostEdge, running, syncParticlesToDrag]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     draggingNodeRef.current = null;
     if (ghostEdge && edgeSourceRef.current) {
-      // Check if pointer released over a node
       const pos = toSVG(e);
       const target = graph.nodes.find(n => {
         const dx = n.x - pos.x;
@@ -126,7 +163,6 @@ export function GraphCanvas() {
       });
       if (target) {
         const sourceId = edgeSourceRef.current;
-        // Avoid duplicate edges
         const exists = graph.edges.some(
           edge => edge.sourceId === sourceId && edge.targetId === target.id
         );
@@ -165,14 +201,22 @@ export function GraphCanvas() {
           <path d="M 40 0 L 0 0 0 40" fill="none" stroke={gridColor} strokeWidth="0.5" />
         </pattern>
       </defs>
-      <rect width="100%" height="100%" fill="url(#grid)" />
+      <rect id="grid-bg" width="100%" height="100%" fill="url(#grid)" />
 
       <EdgeLayer
         edges={graph.edges}
         nodes={graph.nodes}
         selectedEdgeId={selectedEdgeId}
         darkMode={darkMode}
-        onSelectEdge={id => { setSelectedEdgeId(id); setSelectedNodeId(null); }}
+        onSelectEdge={id => {
+            if (activeTool === 'delete') {
+              dispatch({ type: 'DELETE_EDGE', payload: { id } });
+              setSelectedEdgeId(null);
+            } else {
+              setSelectedEdgeId(id);
+              setSelectedNodeId(null);
+            }
+          }}
         onProbChange={(id, v) => dispatch({ type: 'UPDATE_EDGE_PROBABILITY', payload: { id, probability: v } })}
       />
 
@@ -187,6 +231,7 @@ export function GraphCanvas() {
       />
 
       <ParticleLayer
+        key={resetCount}
         count={particlesRef.current.length}
         darkMode={darkMode}
         isEnsemble={isEnsemble}
