@@ -29,6 +29,8 @@ This is a Markov Chain visualization tool built with React 19 + Vite + TypeScrip
 | `UIContext` | dark mode, active tool, simulation mode, selection, modal visibility | `useState` |
 | `SimulationContext` | animation loop, particles, timing | `useRef` + rAF; React state only for `running`, `resetCount`, `speed`, `hasStarted`, `ensembleCount` |
 
+`hasStarted` is mirrored by `hasStartedRef` (kept in sync in `play`, `step`, and `reset`) so callbacks with `[]` deps can read it without capturing stale state. The ensemble particle count slider is disabled once `hasStarted` is true. Changing it before that immediately re-initializes `particlesRef`, increments `resetCount` (remounts `ParticleLayer`), and flushes the ensemble indicator DOM elements — no Reset press required.
+
 Provider nesting in `App.tsx`: `GraphProvider > UIProvider > SimulationProvider` (SimulationProvider needs UIContext's `mode`, so AppInner reads `simulationMode` and passes it in).
 
 ### 60fps particle animation — bypasses React entirely

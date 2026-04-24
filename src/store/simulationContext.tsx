@@ -39,6 +39,7 @@ export function SimulationProvider({ children, mode }: { children: ReactNode; mo
   const { graph } = useGraph();
   const [running, setRunning] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const hasStartedRef = useRef(false);
   const [resetCount, setResetCount] = useState(0);
   const [ensembleCount, setEnsembleCountState] = useState(ENSEMBLE_COUNT_DEFAULT);
   const ensembleCountRef = useRef(ENSEMBLE_COUNT_DEFAULT);
@@ -71,6 +72,43 @@ export function SimulationProvider({ children, mode }: { children: ReactNode; mo
   const setEnsembleCount = useCallback((n: number) => {
     ensembleCountRef.current = n;
     setEnsembleCountState(n);
+    if (!hasStartedRef.current) {
+      const nodes = graphRef.current.nodes;
+      if (nodes.length === 0) {
+        particlesRef.current = [];
+        nodeCountsRef.current = new Map();
+      } else {
+        const startNode = nodes.find(nd => nd.id === startNodeIdRef.current) ?? nodes[0];
+        particlesRef.current = spawnParticles([startNode.id], n);
+        for (const p of particlesRef.current) { p.x = startNode.x; p.y = startNode.y; }
+        nodeCountsRef.current = new Map([[startNode.id, particlesRef.current.length]]);
+      }
+      setResetCount(c => c + 1);
+      const counts = nodeCountsRef.current;
+      const total = particlesRef.current.length;
+      const g = graphRef.current;
+      const nodeMap = new Map(g.nodes.map(nd => [nd.id, nd]));
+      for (const [nodeId, fillEl] of nodeFillRefsMap.current) {
+        if (!fillEl) continue;
+        const frac = total > 0 ? (counts.get(nodeId) ?? 0) / total : 0;
+        const node = nodeMap.get(nodeId);
+        if (!node) continue;
+        fillEl.setAttribute('stroke-dasharray', `${frac * 2 * Math.PI * node.radius} ${2 * Math.PI * node.radius}`);
+      }
+      for (const [nodeId, textEl] of nodeCountTextRefsMap.current) {
+        if (!textEl) continue;
+        textEl.textContent = total > 0 ? String(counts.get(nodeId) ?? 0) : '';
+      }
+      for (const [nodeId, barEl] of nodeBarRefsMap.current) {
+        if (!barEl) continue;
+        const frac = total > 0 ? (counts.get(nodeId) ?? 0) / total : 0;
+        const node = nodeMap.get(nodeId);
+        if (!node) continue;
+        const h = frac * BAR_MAX_HEIGHT;
+        barEl.setAttribute('y', String(node.radius + 8 + BAR_MAX_HEIGHT - h));
+        barEl.setAttribute('height', String(h));
+      }
+    }
   }, []);
 
   const setStartNodeId = useCallback((id: string) => {
@@ -139,6 +177,7 @@ export function SimulationProvider({ children, mode }: { children: ReactNode; mo
     lastTimeRef.current = null;
     stepModeRef.current = false;
     setRunning(false);
+    hasStartedRef.current = false;
     setHasStarted(false);
     initParticles(m);
     // Increment resetCount → forces ParticleLayer to remount with fresh positions
@@ -269,6 +308,7 @@ export function SimulationProvider({ children, mode }: { children: ReactNode; mo
     stepModeRef.current = false;
     lastTimeRef.current = null;
     setRunning(true);
+    hasStartedRef.current = true;
     setHasStarted(true);
     rafRef.current = requestAnimationFrame(tick);
   }, [tick]);
@@ -312,6 +352,7 @@ export function SimulationProvider({ children, mode }: { children: ReactNode; mo
     stepModeRef.current = true;
     lastTimeRef.current = null;
     setRunning(true);
+    hasStartedRef.current = true;
     setHasStarted(true);
     rafRef.current = requestAnimationFrame(tick);
   }, [tick, buildEdgeMaps]);
