@@ -71,7 +71,7 @@ export function GraphCanvas() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && activeTool === 'delete') {
         if (selectedNodeId) {
           dispatch({ type: 'DELETE_NODE', payload: { id: selectedNodeId } });
           setSelectedNodeId(null);
@@ -84,7 +84,7 @@ export function GraphCanvas() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedNodeId, selectedEdgeId, dispatch, setSelectedNodeId, setSelectedEdgeId, reset, simulationMode]);
+  }, [selectedNodeId, selectedEdgeId, activeTool, dispatch, setSelectedNodeId, setSelectedEdgeId, reset, simulationMode]);
 
   // Convert screen coordinates to world (graph) coordinates, accounting for pan/zoom
   const toSVG = useCallback((e: { clientX: number; clientY: number }) => {
